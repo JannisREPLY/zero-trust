@@ -1,0 +1,36 @@
+name: Checkov Scan
+
+on:
+  push:
+    branches:
+      - '**' # Runs on all branches
+  pull_request: # Optionally, you can include PRs
+    branches:
+      - '**'
+
+jobs:
+  checkov:
+    name: Run Checkov Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Set up Python (Checkov runs in a Python environment)
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      # Install Checkov
+      - name: Install Checkov
+        run: |
+          pip install --upgrade pip
+          pip install checkov
+
+      # Run Checkov
+      - name: Run Checkov Scan
+        run: checkov -d zero-trust-infrastructure
+        continue-on-error: false # Fails workflow on Checkov errors
