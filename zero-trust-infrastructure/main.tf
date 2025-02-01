@@ -28,6 +28,53 @@ resource "aws_vpc" "secure_vpc" {
   tags = { Name = "insecure-vpc" }
 }
 
+resource "aws_flow_log" "secure_vpc_flow_log" {
+  vpc_id               = aws_vpc.secure_vpc.id
+  traffic_type         = "ALL"
+  log_destination_type = "s3"
+  log_destination      = aws_s3_bucket.alb_logs.arn
+  iam_role_arn         = aws_iam_role.flow_logs_role.arn
+}
+
+data "aws_iam_policy_document" "flow_logs_assume_role_doc" {
+  statement {
+    effect = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["vpc-flow-logs.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "flow_logs_role" {
+  name               = "vpc-flow-logs-to-s3"
+  assume_role_policy = data.aws_iam_policy_document.flow_logs_assume_role_doc.json
+}
+
+# Policy to allow VPC Flow Logs to write to the ALB logs bucket
+data "aws_iam_policy_document" "flow_logs_to_s3_doc" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      "s3:GetBucketLocation"
+    ]
+    resources = [
+      # Bucket itself
+      aws_s3_bucket.alb_logs.arn,
+      # All objects in the bucket
+      "${aws_s3_bucket.alb_logs.arn}/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "flow_logs_to_s3" {
+  name   = "vpc-flow-logs-to-s3-policy"
+  role   = aws_iam_role.flow_logs_role.id
+  policy = data.aws_iam_policy_document.flow_logs_to_s3_doc.json
+}
+
 resource "aws_subnet" "public_subnet_1" {
   vpc_id                  = aws_vpc.secure_vpc.id
   cidr_block              = "10.0.1.0/24"
@@ -168,9 +215,48 @@ resource "aws_networkfirewall_firewall" "firewall" {
   }
 }
 
+data "aws_iam_policy_document" "network_kms_policy" {
+  statement {
+    sid     = "Allow Administration of the KMS key to the account"
+    effect  = "Allow"
+    actions = [
+      "kms:*" 
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    resources = ["*"]
+  }
+
+  # Example: Additional usage permissions for a specific IAM role
+  statement {
+    sid     = "Allow use of the key"
+    effect  = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        # For instance, allow an IAM role that might be used by Network Firewall
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/someNetworkFirewallRole"
+      ]
+    }
+    resources = ["*"]
+  }
+}
+
 resource "aws_kms_key" "network_kms" {
-  description = "KMS key for Network Firewall"
+  description        = "KMS key for Network Firewall"
   enable_key_rotation = true
+
+  # Attach the custom policy
+  policy = data.aws_iam_policy_document.network_kms_policy.json
 }
 
 ###############################################
@@ -292,13 +378,45 @@ resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring_attach" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
-###############################################
-# RDS ENCRYPTION KEY (CKV_AWS_16)
-###############################################
-resource "aws_kms_key" "rds_kms" {
-  description = "KMS key for RDS encryption"
-  enable_key_rotation = true
+data "aws_iam_policy_document" "rds_kms_policy" {
+  statement {
+    sid     = "Allow Administration of the KMS key to the account"
+    effect  = "Allow"
+    actions = ["kms:*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    resources = ["*"]
+  }
+
+  # Example usage permission for an RDS role or other principal
+  statement {
+    sid     = "Allow use of the key"
+    effect  = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/rdsEncryptionRole"
+      ]
+    }
+    resources = ["*"]
+  }
 }
+
+resource "aws_kms_key" "rds_kms" {
+  description         = "KMS key for RDS encryption"
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.rds_kms_policy.json
+}
+
 
 ###############################################
 # RDS INSTANCE (Storage encryption + monitoring)
@@ -335,6 +453,8 @@ resource "aws_db_instance" "default" {
   # CKV_AWS_118: Enhanced Monitoring
   monitoring_interval = 60
   monitoring_role_arn = aws_iam_role.rds_enhanced_monitoring.arn
+
+  copy_tags_to_snapshot     = true
 
   tags = { Name = "my-rds-instance" }
 }
@@ -378,9 +498,43 @@ resource "aws_sns_topic" "cloudtrail_sns" {
   kms_master_key_id = aws_kms_key.cloudtrail_kms.arn
 }
 
+data "aws_iam_policy_document" "cloudtrail_kms_policy" {
+  statement {
+    sid     = "Allow Administration of the KMS key to the account"
+    effect  = "Allow"
+    actions = ["kms:*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    resources = ["*"]
+  }
+
+  # Example usage permission for CloudTrail
+  statement {
+    sid     = "Allow CloudTrail to use the key"
+    effect  = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = [
+        "cloudtrail.amazonaws.com"
+      ]
+    }
+    resources = ["*"]
+  }
+}
+
 resource "aws_kms_key" "cloudtrail_kms" {
-  description = "KMS key for CloudTrail logs"
-  enable_key_rotation    = true
+  description         = "KMS key for CloudTrail logs"
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.cloudtrail_kms_policy.json
 }
 
 resource "aws_cloudtrail" "main_trail" {
@@ -399,6 +553,97 @@ resource "aws_cloudtrail" "main_trail" {
   # CKV_AWS_252: Define an SNS Topic
   sns_topic_name = aws_sns_topic.cloudtrail_sns.name
 }
+
+# Create an SQS queue to receive S3 event notifications
+resource "aws_sqs_queue" "s3_event_queue" {
+  name = "my-s3-event-queue"
+}
+
+# Example for the CloudTrail bucket
+resource "aws_s3_bucket_notification" "cloudtrail_notifications" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  queue {
+    queue_arn = aws_sqs_queue.s3_event_queue.arn
+    events    = ["s3:ObjectCreated:*"]
+  }
+}
+
+# Example for the ALB logs bucket
+resource "aws_s3_bucket_notification" "alb_logs_notifications" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  queue {
+    queue_arn = aws_sqs_queue.s3_event_queue.arn
+    events    = ["s3:ObjectCreated:*"]
+  }
+}
+
+resource "aws_sqs_queue_policy" "s3_event_queue_policy" {
+  queue_url = aws_sqs_queue.s3_event_queue.url
+  policy    = data.aws_iam_policy_document.s3_event_queue_policy.json
+}
+
+data "aws_iam_policy_document" "s3_event_queue_policy" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "SQS:SendMessage"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+    resources = [aws_sqs_queue.s3_event_queue.arn]
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_s3_bucket.cloudtrail_bucket.arn, aws_s3_bucket.alb_logs.arn]
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "cloudtrail_versioning" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "alb_logs_versioning" {
+  bucket = aws_s3_bucket.alb_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+#
+# 1) Create a new bucket for storing the access logs
+#
+resource "aws_s3_bucket" "access_logs_bucket" {
+  bucket = "my-s3-access-logs-bucket"
+  acl    = "log-delivery-write"
+  # Optionally enable versioning and encryption here as well
+}
+
+#
+# 2) Enable S3 server access logging for the CloudTrail bucket
+#
+resource "aws_s3_bucket_logging" "cloudtrail_access_logging" {
+  bucket        = aws_s3_bucket.cloudtrail_bucket.id
+  target_bucket = aws_s3_bucket.access_logs_bucket.id
+  target_prefix = "cloudtrail/"
+}
+
+#
+# 3) Enable S3 server access logging for the ALB logs bucket
+#
+resource "aws_s3_bucket_logging" "alb_logs_access_logging" {
+  bucket        = aws_s3_bucket.alb_logs.id
+  target_bucket = aws_s3_bucket.access_logs_bucket.id
+  target_prefix = "alb/"
+}
+
 
 ###############################################
 # PRINCIPLE #4 - Micro-Segmentation
