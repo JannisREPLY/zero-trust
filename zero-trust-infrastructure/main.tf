@@ -831,7 +831,7 @@ resource "aws_iam_role_policy_attachment" "cloudtrail_cw_logs_attach" {
 
 resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_lifecycle" {
   bucket = aws_s3_bucket.cloudtrail_bucket.id
-
+  
   rule {
     id     = "transition-cloudtrail-logs"
     status = "Enabled"
@@ -848,6 +848,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_lifecycle" {
 
     expiration {
       days = 365  # Delete logs after 1 year
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 
@@ -881,6 +884,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_lifecycle" {
     expiration {
       days = 365
     }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
@@ -903,6 +910,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs_lifecycle" {
 
     expiration {
       days = 365
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 }
@@ -961,7 +972,6 @@ resource "aws_wafv2_web_acl" "example_waf" {
     allow {}
   }
 
-  # ✅ Add AWS Log4j Protection Rule
   rule {
     name     = "AWSManagedRulesKnownBadInputsRuleSet"
     priority = 2
