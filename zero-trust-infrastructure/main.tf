@@ -26,9 +26,20 @@ resource "aws_vpc" "secure_vpc" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = { 
-    Name = "insecure-vpc" 
+    Name = "secure-vpc" 
   }
 }
+
+resource "aws_default_security_group" "secure_vpc_default_sg" {
+  vpc_id = aws_vpc.secure_vpc.id
+
+  # No inbound rules => Deny all inbound
+  ingress = []
+
+  # No outbound rules => Deny all outbound
+  egress = []
+}
+
 
 resource "aws_flow_log" "secure_vpc_flow_log" {
   vpc_id               = aws_vpc.secure_vpc.id
@@ -109,6 +120,33 @@ resource "aws_subnet" "firewall_subnet" {
   availability_zone = "eu-central-1a"
   tags = { 
     Name = "firewall-subnet" 
+  }
+}
+
+resource "aws_networkfirewall_logging_configuration" "firewall_logs" {
+  firewall_arn = aws_networkfirewall_firewall.firewall.arn
+
+  logging_configuration {
+    log_destination_config {
+      # Log Type = FLOW or ALERT (you can define one or both)
+      log_type             = "FLOW"
+      log_destination_type = "S3"
+
+      # “log_destination” is a map of required properties for that type
+      log_destination = {
+        bucketName = aws_s3_bucket.access_logs_bucket.bucket
+        # Optional prefix: "firewall-logs/"
+      }
+    }
+
+    # Example of also enabling ALERT logs to the same or different destination
+    log_destination_config {
+      log_type             = "ALERT"
+      log_destination_type = "S3"
+      log_destination = {
+        bucketName = aws_s3_bucket.access_logs_bucket.bucket
+      }
+    }
   }
 }
 
@@ -488,6 +526,7 @@ EOF
 # PRINCIPLE #3 - Continuous Monitoring (CloudTrail)
 ###############################################
 resource "aws_s3_bucket" "cloudtrail_bucket" {
+  #checkov:skip=CKV_AWS_144: Overkill - Replication
   bucket = "my-cloudtrail-logs-bucket"
   acl    = "private"
 }
@@ -539,6 +578,9 @@ resource "aws_cloudtrail" "main_trail" {
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_logging                = true
+
+  cloud_watch_logs_group_arn = aws_cloudwatch_log_group.cloudtrail.arn
+  cloud_watch_logs_role_arn  = aws_iam_role.cloudtrail_cw_role.arn
 
   # CKV_AWS_36: Enable log file validation
   enable_log_file_validation = true
@@ -619,6 +661,7 @@ resource "aws_s3_bucket_versioning" "alb_logs_versioning" {
 }
 
 resource "aws_s3_bucket" "access_logs_bucket" {
+  #checkov:skip=CKV_AWS_144: Overkill - Replication
   bucket = "my-s3-access-logs-bucket"
   acl    = "log-delivery-write"
 }
@@ -629,10 +672,221 @@ resource "aws_s3_bucket_logging" "cloudtrail_access_logging" {
   target_prefix = "cloudtrail/"
 }
 
+resource "aws_s3_bucket_versioning" "access_logs_versioning" {
+  bucket = aws_s3_bucket.access_logs_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_s3_bucket_logging" "alb_logs_access_logging" {
   bucket        = aws_s3_bucket.alb_logs.id
   target_bucket = aws_s3_bucket.access_logs_bucket.id
   target_prefix = "alb/"
+}
+
+resource "aws_s3_bucket_notification" "access_logs_bucket_notifications" {
+  bucket = aws_s3_bucket.access_logs_bucket.id
+
+  # Example: Send event notifications to an existing SQS queue
+  queue {
+    queue_arn = aws_sqs_queue.s3_event_queue.arn
+    events    = ["s3:ObjectCreated:*"]
+    
+    # Optionally define filters for prefix, suffix, etc. if needed
+    # filter_prefix = "some/path/"
+    # filter_suffix = ".log"
+  }
+}
+
+# For the CloudTrail logs bucket
+resource "aws_s3_bucket_public_access_block" "cloudtrail_bucket_block" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.bucket
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# For the access logs bucket
+resource "aws_s3_bucket_public_access_block" "access_logs_bucket_block" {
+  bucket = aws_s3_bucket.access_logs_bucket.bucket
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# For the ALB logs bucket
+resource "aws_s3_bucket_public_access_block" "alb_logs_bucket_block" {
+  bucket = aws_s3_bucket.alb_logs.bucket
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+##############################################################################
+# 1) CloudTrail bucket encrypted with a CUSTOM KMS key you already created.
+##############################################################################
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_enc" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.bucket
+  
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.cloudtrail_kms.arn
+    }
+  }
+}
+
+##############################################################################
+# 2) Access logs bucket encrypted with the AWS-managed KMS key for S3.
+#    (Or create your own custom KMS key.)
+##############################################################################
+resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs_enc" {
+  bucket = aws_s3_bucket.access_logs_bucket.bucket
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      # For simplicity, use the AWS-managed key:
+      kms_master_key_id = "alias/aws/s3"
+    }
+  }
+}
+
+##############################################################################
+# 3) ALB logs bucket encrypted with the AWS-managed KMS key for S3.
+##############################################################################
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs_enc" {
+  bucket = aws_s3_bucket.alb_logs.bucket
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = "alias/aws/s3"
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "cloudtrail" {
+  name              = "/aws/cloudtrail/logs"
+  retention_in_days = 7
+}
+
+data "aws_iam_policy_document" "cloudtrail_assume_role" {
+  statement {
+    effect = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "cloudtrail_cw_role" {
+  name               = "cloudtrail-cloudwatch-role"
+  assume_role_policy = data.aws_iam_policy_document.cloudtrail_assume_role.json
+}
+
+data "aws_iam_policy_document" "cloudtrail_cw_logs_policy_doc" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:PutLogEvents",
+      "logs:CreateLogStream"
+    ]
+    # If you want CloudTrail to create the log group automatically,
+    # you could also include "logs:CreateLogGroup" here. 
+    resources = [
+      "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "cloudtrail_cw_logs_policy" {
+  name   = "cloudtrail-cloudwatch-logs"
+  policy = data.aws_iam_policy_document.cloudtrail_cw_logs_policy_doc.json
+}
+
+resource "aws_iam_role_policy_attachment" "cloudtrail_cw_logs_attach" {
+  role       = aws_iam_role.cloudtrail_cw_role.name
+  policy_arn = aws_iam_policy.cloudtrail_cw_logs_policy.arn
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_lifecycle" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  rule {
+    id     = "transition-cloudtrail-logs"
+    status = "Enabled"
+
+    transition {
+      days          = 30  # Move to Standard-IA after 30 days
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 90  # Move to Glacier Deep Archive after 90 days
+      storage_class = "DEEP_ARCHIVE"
+    }
+
+    expiration {
+      days = 365  # Delete logs after 1 year
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs_lifecycle" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  rule {
+    id     = "transition-alb-logs"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 90
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 365
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "access_logs_lifecycle" {
+  bucket = aws_s3_bucket.access_logs_bucket.id
+
+  rule {
+    id     = "transition-access-logs"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 90
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 365
+    }
+  }
 }
 
 ###############################################
@@ -648,6 +902,7 @@ resource "aws_subnet" "private_subnet_1" {
 }
 
 resource "aws_s3_bucket" "alb_logs" {
+  #checkov:skip=CKV_AWS_144: Overkill - Replication
   bucket = "my-alb-logs-bucket"
   acl    = "private"
 }
@@ -677,6 +932,50 @@ resource "aws_lb" "public_alb" {
   tags = {
     Name = "public-alb"
   }
+}
+
+resource "aws_wafv2_web_acl" "example_waf" {
+  name        = "example-wafv2-acl"
+  scope       = "REGIONAL"
+  description = "Basic WAF for public ALB"
+  
+  default_action {
+    allow {}
+  }
+
+  # Example of adding a simple managed rule group (AWSManagedRulesCommonRuleSet)
+  rule {
+    name     = "AWSCommonRules"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      sampled_requests_enabled   = true
+      metric_name                = "awsCommonRules"
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    sampled_requests_enabled   = true
+    metric_name                = "exampleWebACL"
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "waf_alb_association" {
+  resource_arn = aws_lb.public_alb.arn
+  web_acl_arn  = aws_wafv2_web_acl.example_waf.arn
 }
 
 resource "aws_lb_target_group" "web_tg" {
@@ -712,6 +1011,7 @@ resource "aws_lb_listener" "alb_https_listener" {
   load_balancer_arn = aws_lb.public_alb.arn
   port              = 443
   protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
   default_action {
     type             = "forward"
