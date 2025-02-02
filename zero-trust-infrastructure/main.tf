@@ -550,7 +550,8 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
     principals {
       type        = "Service"
       identifiers = [
-        "cloudtrail.amazonaws.com"
+        "cloudtrail.amazonaws.com",
+        "logs.amazonaws.com"
       ]
     }
 
@@ -561,6 +562,13 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
       variable = "kms:ViaService"
       values   = [
         "cloudtrail.${var.aws_region}.amazonaws.com"
+      ]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = [
+        "logs.${var.aws_region}.amazonaws.com"
       ]
     }
   }
@@ -776,7 +784,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs_enc" {
 
 resource "aws_cloudwatch_log_group" "cloudtrail" {
   name              = "/aws/cloudtrail/logs"
-  retention_in_days = 7
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.cloudtrail_kms.arn
 }
 
 data "aws_iam_policy_document" "cloudtrail_assume_role" {
@@ -839,6 +848,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_lifecycle" {
 
     expiration {
       days = 365  # Delete logs after 1 year
+    }
+  }
+
+  rule {
+    id     = "abort-multipart-uploads"
+    status = "Enabled"
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 }
@@ -937,16 +955,16 @@ resource "aws_lb" "public_alb" {
 resource "aws_wafv2_web_acl" "example_waf" {
   name        = "example-wafv2-acl"
   scope       = "REGIONAL"
-  description = "Basic WAF for public ALB"
-  
+  description = "Basic WAF for public ALB with Log4j protection"
+
   default_action {
     allow {}
   }
 
-  # Example of adding a simple managed rule group (AWSManagedRulesCommonRuleSet)
+  # ✅ Add AWS Log4j Protection Rule
   rule {
-    name     = "AWSCommonRules"
-    priority = 1
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
 
     override_action {
       none {}
@@ -954,7 +972,7 @@ resource "aws_wafv2_web_acl" "example_waf" {
 
     statement {
       managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
         vendor_name = "AWS"
       }
     }
@@ -962,7 +980,7 @@ resource "aws_wafv2_web_acl" "example_waf" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       sampled_requests_enabled   = true
-      metric_name                = "awsCommonRules"
+      metric_name                = "awsBadInputsRules"
     }
   }
 
@@ -976,6 +994,11 @@ resource "aws_wafv2_web_acl" "example_waf" {
 resource "aws_wafv2_web_acl_association" "waf_alb_association" {
   resource_arn = aws_lb.public_alb.arn
   web_acl_arn  = aws_wafv2_web_acl.example_waf.arn
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
+  log_destination_configs = [aws_cloudwatch_log_group.cloudtrail.arn]
+  resource_arn           = aws_wafv2_web_acl.example_waf.arn
 }
 
 resource "aws_lb_target_group" "web_tg" {
