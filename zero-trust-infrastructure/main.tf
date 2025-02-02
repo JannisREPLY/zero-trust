@@ -25,7 +25,9 @@ resource "aws_vpc" "secure_vpc" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "insecure-vpc" }
+  tags = { 
+    Name = "insecure-vpc" 
+  }
 }
 
 resource "aws_flow_log" "secure_vpc_flow_log" {
@@ -61,9 +63,7 @@ data "aws_iam_policy_document" "flow_logs_to_s3_doc" {
       "s3:GetBucketLocation"
     ]
     resources = [
-      # Bucket itself
       aws_s3_bucket.alb_logs.arn,
-      # All objects in the bucket
       "${aws_s3_bucket.alb_logs.arn}/*"
     ]
   }
@@ -76,22 +76,28 @@ resource "aws_iam_role_policy" "flow_logs_to_s3" {
 }
 
 resource "aws_subnet" "public_subnet_1" {
-  vpc_id                  = aws_vpc.secure_vpc.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "eu-central-1a"
-  tags = { Name = "public-subnet-1" }
+  vpc_id            = aws_vpc.secure_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "eu-central-1a"
+  tags = { 
+    Name = "public-subnet-1" 
+  }
 }
 
 resource "aws_subnet" "public_subnet_2" {
-  vpc_id                  = aws_vpc.secure_vpc.id
-  cidr_block              = "10.0.2.0/24"
-  availability_zone       = "eu-central-1b"
-  tags = { Name = "public-subnet-2" }
+  vpc_id            = aws_vpc.secure_vpc.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "eu-central-1b"
+  tags = { 
+    Name = "public-subnet-2" 
+  }
 }
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.secure_vpc.id
-  tags   = { Name = "insecure-igw" }
+  tags   = { 
+    Name = "insecure-igw" 
+  }
 }
 
 ###############################################
@@ -101,7 +107,9 @@ resource "aws_subnet" "firewall_subnet" {
   vpc_id            = aws_vpc.secure_vpc.id
   cidr_block        = "10.0.3.0/24"
   availability_zone = "eu-central-1a"
-  tags = { Name = "firewall-subnet" }
+  tags = { 
+    Name = "firewall-subnet" 
+  }
 }
 
 resource "aws_networkfirewall_rule_group" "allow_all_stateless_rule_group" {
@@ -111,7 +119,7 @@ resource "aws_networkfirewall_rule_group" "allow_all_stateless_rule_group" {
 
   encryption_configuration {
     key_id = aws_kms_key.network_kms.arn
-    type = "CUSTOMER_KMS"
+    type   = "CUSTOMER_KMS"
   }
 
   rule_group {
@@ -137,13 +145,13 @@ resource "aws_networkfirewall_rule_group" "allow_all_stateless_rule_group" {
 }
 
 resource "aws_networkfirewall_rule_group" "block_outside_DE" {
-  capacity    = 100
-  name        = "block-outside-DE"
-  type        = "STATEFUL"
+  capacity = 100
+  name     = "block-outside-DE"
+  type     = "STATEFUL"
 
   encryption_configuration {
     key_id = aws_kms_key.network_kms.arn
-    type = "CUSTOMER_KMS"
+    type   = "CUSTOMER_KMS"
   }
 
   rule_group {
@@ -176,7 +184,7 @@ resource "aws_networkfirewall_firewall_policy" "firewall_policy" {
 
   encryption_configuration {
     key_id = aws_kms_key.network_kms.arn
-    type = "CUSTOMER_KMS"
+    type   = "CUSTOMER_KMS"
   }
 
   firewall_policy {
@@ -202,12 +210,11 @@ resource "aws_networkfirewall_firewall" "firewall" {
   name                = "Basic-Firewall"
   firewall_policy_arn = aws_networkfirewall_firewall_policy.firewall_policy.arn
   vpc_id              = aws_vpc.secure_vpc.id
-
-  delete_protection = true
+  delete_protection    = true
 
   encryption_configuration {
     key_id = aws_kms_key.network_kms.arn
-    type = "CUSTOMER_KMS"
+    type   = "CUSTOMER_KMS"
   }
 
   subnet_mapping {
@@ -217,21 +224,7 @@ resource "aws_networkfirewall_firewall" "firewall" {
 
 data "aws_iam_policy_document" "network_kms_policy" {
   statement {
-    sid     = "Allow Administration of the KMS key to the account"
-    effect  = "Allow"
-    actions = [
-      "kms:*" 
-    ]
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-    resources = ["*"]
-  }
-
-  # Example: Additional usage permissions for a specific IAM role
-  statement {
-    sid     = "Allow use of the key"
+    sid     = "AllowNetworkFirewallUseKey"
     effect  = "Allow"
     actions = [
       "kms:Encrypt",
@@ -241,21 +234,29 @@ data "aws_iam_policy_document" "network_kms_policy" {
       "kms:DescribeKey"
     ]
     principals {
-      type        = "AWS"
+      type        = "Service"
       identifiers = [
-        # For instance, allow an IAM role that might be used by Network Firewall
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/someNetworkFirewallRole"
+        "network-firewall.amazonaws.com"
       ]
     }
+
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = [
+        "network-firewall.${var.aws_region}.amazonaws.com"
+      ]
+    }
   }
 }
 
 resource "aws_kms_key" "network_kms" {
-  description        = "KMS key for Network Firewall"
+  description         = "KMS key for Network Firewall"
   enable_key_rotation = true
 
-  # Attach the custom policy
+  # Attach the custom policy above
   policy = data.aws_iam_policy_document.network_kms_policy.json
 }
 
@@ -294,7 +295,7 @@ resource "aws_security_group" "rds_sg" {
     to_port         = 3306
     protocol        = "tcp"
     security_groups = [aws_security_group.secure_sg.id]
-    description = "Allow DB traffic from secure_sg"
+    description     = "Allow DB traffic from secure_sg"
   }
 
   egress {
@@ -330,6 +331,7 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_ec2" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Policy for IAM DB Authentication
 resource "aws_iam_policy" "rds_connect_policy" {
   name   = "rds-connect-policy"
   policy = jsonencode({
@@ -354,9 +356,6 @@ resource "aws_iam_instance_profile" "ec2" {
   role = aws_iam_role.ec2.name
 }
 
-###############################################
-# ENHANCED MONITORING FOR RDS (CKV_AWS_118)
-###############################################
 data "aws_iam_policy_document" "rds_enhanced_monitoring_assume" {
   statement {
     effect = "Allow"
@@ -378,21 +377,13 @@ resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring_attach" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
+
+###############################################
+# KMS KEY FOR RDS
+###############################################
 data "aws_iam_policy_document" "rds_kms_policy" {
   statement {
-    sid     = "Allow Administration of the KMS key to the account"
-    effect  = "Allow"
-    actions = ["kms:*"]
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-    resources = ["*"]
-  }
-
-  # Example usage permission for an RDS role or other principal
-  statement {
-    sid     = "Allow use of the key"
+    sid     = "AllowRDSUseKey"
     effect  = "Allow"
     actions = [
       "kms:Encrypt",
@@ -402,12 +393,21 @@ data "aws_iam_policy_document" "rds_kms_policy" {
       "kms:DescribeKey"
     ]
     principals {
-      type        = "AWS"
+      type        = "Service"
       identifiers = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/rdsEncryptionRole"
+        "rds.amazonaws.com"
       ]
     }
+
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = [
+        "rds.${var.aws_region}.amazonaws.com"
+      ]
+    }
   }
 }
 
@@ -417,33 +417,31 @@ resource "aws_kms_key" "rds_kms" {
   policy              = data.aws_iam_policy_document.rds_kms_policy.json
 }
 
-
-###############################################
-# RDS INSTANCE (Storage encryption + monitoring)
-###############################################
 resource "aws_db_subnet_group" "default" {
   name       = "main-db-subnet-group"
   subnet_ids = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]
-  tags       = { Name = "db-subnet-group" }
+  tags       = { 
+    Name = "db-subnet-group" 
+  }
 }
 
 resource "aws_db_instance" "default" {
-  allocated_storage                 = 5
-  engine                            = "mysql"
-  engine_version                    = "8.0"
-  instance_class                    = "db.t3.micro"
-  db_name                           = "mydb"
-  username                          = "admin"
-  password                          = "supersecret"
-  skip_final_snapshot               = true
-  db_subnet_group_name              = aws_db_subnet_group.default.name
-  vpc_security_group_ids            = [aws_security_group.rds_sg.id]
-  publicly_accessible               = false
+  allocated_storage                  = 5
+  engine                             = "mysql"
+  engine_version                     = "8.0"
+  instance_class                     = "db.t3.micro"
+  db_name                            = "mydb"
+  username                           = "admin"
+  password                           = "supersecret"
+  skip_final_snapshot                = true
+  db_subnet_group_name               = aws_db_subnet_group.default.name
+  vpc_security_group_ids             = [aws_security_group.rds_sg.id]
+  publicly_accessible                = false
   iam_database_authentication_enabled = true
-  auto_minor_version_upgrade = true
-  enabled_cloudwatch_logs_exports = ["general", "error", "slowquery"]
-  multi_az             = true
-  deletion_protection  = true
+  auto_minor_version_upgrade         = true
+  enabled_cloudwatch_logs_exports    = ["general", "error", "slowquery"]
+  multi_az                           = true
+  deletion_protection                = true
 
   # CKV_AWS_16: At-rest encryption
   storage_encrypted = true
@@ -454,20 +452,21 @@ resource "aws_db_instance" "default" {
   monitoring_interval = 60
   monitoring_role_arn = aws_iam_role.rds_enhanced_monitoring.arn
 
-  copy_tags_to_snapshot     = true
+  copy_tags_to_snapshot = true
 
-  tags = { Name = "my-rds-instance" }
+  tags = { 
+    Name = "my-rds-instance" 
+  }
 }
 
-###############################################
-# RDS VPC ENDPOINT
-###############################################
 resource "aws_vpc_endpoint" "rds_endpoint" {
-  vpc_id              = aws_vpc.secure_vpc.id
-  service_name        = "com.amazonaws.${var.aws_region}.rds"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = [aws_subnet.public_subnet_1.id]
-  security_group_ids  = [aws_security_group.rds_sg.id]
+  vpc_id            = aws_vpc.secure_vpc.id
+  service_name      = "com.amazonaws.${var.aws_region}.rds"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.public_subnet_1.id]
+  security_group_ids = [
+    aws_security_group.rds_sg.id
+  ]
   private_dns_enabled = true
 
   policy = <<EOF
@@ -477,8 +476,8 @@ resource "aws_vpc_endpoint" "rds_endpoint" {
     {
       "Effect": "Allow",
       "Principal": "*",
-      "Action": "rds:Connect",
-      "Resource": "arn:aws:rds:${var.aws_region}:${data.aws_caller_identity.current.account_id}:db/${aws_db_instance.default.id}"
+      "Action": "rds-db:connect",
+      "Resource": "arn:aws:rds:${var.aws_region}:${data.aws_caller_identity.current.account_id}:db:${aws_db_instance.default.id}"
     }
   ]
 }
@@ -494,23 +493,11 @@ resource "aws_s3_bucket" "cloudtrail_bucket" {
 }
 
 resource "aws_sns_topic" "cloudtrail_sns" {
-  name = "cloudtrail-sns"
+  name             = "cloudtrail-sns"
   kms_master_key_id = aws_kms_key.cloudtrail_kms.arn
 }
 
 data "aws_iam_policy_document" "cloudtrail_kms_policy" {
-  statement {
-    sid     = "Allow Administration of the KMS key to the account"
-    effect  = "Allow"
-    actions = ["kms:*"]
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-    resources = ["*"]
-  }
-
-  # Example usage permission for CloudTrail
   statement {
     sid     = "Allow CloudTrail to use the key"
     effect  = "Allow"
@@ -527,7 +514,16 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
         "cloudtrail.amazonaws.com"
       ]
     }
+
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = [
+        "cloudtrail.${var.aws_region}.amazonaws.com"
+      ]
+    }
   }
 }
 
@@ -556,10 +552,12 @@ resource "aws_cloudtrail" "main_trail" {
 
 # Create an SQS queue to receive S3 event notifications
 resource "aws_sqs_queue" "s3_event_queue" {
-  name = "my-s3-event-queue"
+  name                             = "my-s3-event-queue"
+  kms_master_key_id                = aws_kms_key.cloudtrail_kms.arn
+  kms_data_key_reuse_period_seconds = 300
 }
 
-# Example for the CloudTrail bucket
+# Example for CloudTrail bucket
 resource "aws_s3_bucket_notification" "cloudtrail_notifications" {
   bucket = aws_s3_bucket.cloudtrail_bucket.id
 
@@ -598,7 +596,10 @@ data "aws_iam_policy_document" "s3_event_queue_policy" {
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [aws_s3_bucket.cloudtrail_bucket.arn, aws_s3_bucket.alb_logs.arn]
+      values   = [
+        aws_s3_bucket.cloudtrail_bucket.arn,
+        aws_s3_bucket.alb_logs.arn
+      ]
     }
   }
 }
@@ -617,33 +618,22 @@ resource "aws_s3_bucket_versioning" "alb_logs_versioning" {
   }
 }
 
-#
-# 1) Create a new bucket for storing the access logs
-#
 resource "aws_s3_bucket" "access_logs_bucket" {
   bucket = "my-s3-access-logs-bucket"
   acl    = "log-delivery-write"
-  # Optionally enable versioning and encryption here as well
 }
 
-#
-# 2) Enable S3 server access logging for the CloudTrail bucket
-#
 resource "aws_s3_bucket_logging" "cloudtrail_access_logging" {
   bucket        = aws_s3_bucket.cloudtrail_bucket.id
   target_bucket = aws_s3_bucket.access_logs_bucket.id
   target_prefix = "cloudtrail/"
 }
 
-#
-# 3) Enable S3 server access logging for the ALB logs bucket
-#
 resource "aws_s3_bucket_logging" "alb_logs_access_logging" {
   bucket        = aws_s3_bucket.alb_logs.id
   target_bucket = aws_s3_bucket.access_logs_bucket.id
   target_prefix = "alb/"
 }
-
 
 ###############################################
 # PRINCIPLE #4 - Micro-Segmentation
@@ -652,13 +642,11 @@ resource "aws_subnet" "private_subnet_1" {
   vpc_id            = aws_vpc.secure_vpc.id
   cidr_block        = "10.0.10.0/24"
   availability_zone = "eu-central-1a"
-  tags             = { Name = "private-subnet-1" }
+  tags = { 
+    Name = "private-subnet-1" 
+  }
 }
 
-###############################################
-# ALB with Deletion Protection, Access Logging,
-# and Dropping Invalid HTTP Headers
-###############################################
 resource "aws_s3_bucket" "alb_logs" {
   bucket = "my-alb-logs-bucket"
   acl    = "private"
@@ -667,7 +655,7 @@ resource "aws_s3_bucket" "alb_logs" {
 resource "aws_lb" "public_alb" {
   name               = "public-alb"
   load_balancer_type = "application"
-  subnets            = [
+  subnets = [
     aws_subnet.public_subnet_1.id,
     aws_subnet.public_subnet_2.id
   ]
@@ -691,10 +679,6 @@ resource "aws_lb" "public_alb" {
   }
 }
 
-###############################################
-# HTTPS Target Group with a Health Check
-# (CKV_AWS_261: define health_check)
-###############################################
 resource "aws_lb_target_group" "web_tg" {
   name        = "web-tg"
   port        = 443
@@ -729,18 +713,12 @@ resource "aws_lb_listener" "alb_https_listener" {
   port              = 443
   protocol          = "HTTPS"
 
-  # REPLACE with a valid AWS Certificate Manager ARN
-  #certificate_arn = "arn:aws:acm:REGION:ACCOUNT:certificate/VALID-CERT-ID"
-
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.web_tg.arn
   }
 }
 
-###############################################
-# The EC2 instance in a private subnet
-###############################################
 resource "aws_instance" "web_server" {
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t3.micro"
@@ -749,7 +727,7 @@ resource "aws_instance" "web_server" {
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
 
   ebs_optimized = true
-  monitoring = true
+  monitoring    = true
 
   root_block_device {
     encrypted = true
@@ -757,10 +735,12 @@ resource "aws_instance" "web_server" {
 
   metadata_options {
     http_endpoint = "enabled"
-    http_tokens = "required"
+    http_tokens   = "required"
   }
 
-  tags = { Name = "web-server" }
+  tags = { 
+    Name = "web-server" 
+  }
 
   depends_on = [
     aws_lb_listener.alb_http_listener,
@@ -771,7 +751,6 @@ resource "aws_instance" "web_server" {
 ###############################################
 # PRINCIPLE #5 - Zero Trust Access
 ###############################################
-# Adjust resource name for the new provider naming convention
 resource "aws_verifiedaccess_instance" "zero_trust" {
   description = "Zero Trust Access Instance"
 }
