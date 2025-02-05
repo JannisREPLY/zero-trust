@@ -89,7 +89,7 @@ Below is a placeholder for your architecture diagram. Replace the placeholder im
 ## Configuration
 
 -   **Variables:** Adjust any variables (e.g., `var.aws_region`, `var.allowed_ip`) in a `terraform.tfvars` file or via the command line to match your environment.
--   **Certificates:** If you plan to enable HTTPS on the ALB listener, supply a valid certificate ARN in the commented section within <5-zero-trust-access.tf>.
+-   **Certificates:** If you plan to enable HTTPS on the ALB listener, supply a valid certificate ARN in the commented section within [5-zero-trust-access.tf](zero-trust-infrastructure/5-zero-trust-access.tf).
 -   **Security Policies:** Review and customize IAM policies, security group rules, and other security-related settings to meet your compliance and security guidelines.
 
 ## Cleanup
