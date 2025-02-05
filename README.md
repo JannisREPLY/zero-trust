@@ -1,43 +1,99 @@
-Zero Trust AWS Infrastructure
-=============================
+# AWS Zero Trust Infrastructure Example
 
-This repository demonstrates a **Zero Trust** approach to building an AWS environment with Terraform. The code provisions a secure VPC setup with network firewall rules, restricted access to resources, continuous monitoring, micro-segmentation, and verified access. It also includes recommended security best practices such as encryption-at-rest for RDS, deletion protection, and KMS-based encryption for critical logs and network firewall resources.
+This repository contains a comprehensive Terraform configuration that demonstrates an AWS infrastructure built in accordance with the five principles of Zero Trust Security. The configuration covers aspects such as strict firewall policies, least privilege IAM roles, continuous monitoring, network micro-segmentation, and zero trust access mechanisms.
 
-Purpose
--------
+> **Note:** This project is intended as an example and should be tailored to meet your organization's specific security requirements.
 
--   **Minimal Attack Surface**\
-    Everything starts from a position of no trust ("distrust everything"). Traffic is tightly controlled using **AWS Network Firewall**.
--   **Least Privilege**\
-    User, service, and database permissions follow a least-privilege model. For example, the EC2 instance role only has permissions for `rds-db:connect`.
--   **Continuous Monitoring**\
-    Logging and auditing are enabled via **Amazon CloudTrail**. Critical changes and events can be monitored in near real time.
--   **Micro-Segmentation**\
-    The workload runs in private subnets behind an ALB in public subnets, limiting lateral movement in the network.
--   **Zero Trust Access**\
-    Placeholder resources (e.g., **AWS Verified Access**) show how session posture checks can be enforced to maintain strict authentication and authorization.
+## Overview
 
-Infrastructure Diagram
-------------------------------------
+The project is organized into multiple Terraform files, each focusing on one or more of the Zero Trust principles:
+
+1.  **Distrust Everything (Principle #1)**
+
+    -   **File:** [1-distruft-of-everything.tf](zero-trust-infrastructure/1-distrust-of-everything.tf)
+    -   **Highlights:**
+        -   Dedicated firewall subnet and restrictive default security groups (no inbound/outbound traffic).
+        -   AWS Network Firewall configuration with custom stateless and stateful rule groups.
+        -   Logging configuration to capture both flow and alert logs via Amazon S3.
+2.  **Minimizing Authorizations (Principle #2)**
+
+    -   **File:** [2-least-privilege.tf](zero-trust-infrastructure/2-least-privilege.tf)
+    -   **Highlights:**
+        -   Creation of IAM roles and policies for EC2 and RDS with the minimum required permissions.
+        -   Enforcement of IAM DB authentication for RDS.
+        -   Use of instance profiles and enhanced monitoring roles with least privilege.
+3.  **Continuous Monitoring (Principle #3)**
+
+    -   **File:** [3-continous-monitoring.tf](zero-trust-infrastructure/3-continuous-monitoring.tf)
+    -   **Highlights:**
+        -   Deployment of AWS CloudTrail for comprehensive logging.
+        -   Configurations for S3 bucket logging, versioning, and lifecycle management for log retention.
+        -   Integration with Amazon SNS and CloudWatch Logs for real-time monitoring and alerting.
+        -   Setup of VPC Flow Logs for network traffic analysis.
+4.  **Micro-Segmentation (Principle #4)**
+
+    -   **File:** [4-micro-segmentation.tf](zero-trust-infrastructure/4-micro-segmentation.tf)
+    -   **Highlights:**
+        -   Definition of multiple subnets (public and private) within a secure VPC.
+        -   Configuration of an Application Load Balancer (ALB) with WAF protection.
+        -   Isolation of resources via dedicated subnets and controlled internet gateway access.
+5.  **Zero Trust Access (Principle #5)**
+
+    -   **File:** [5-zero-trust-access.tf](zero-trust-infrastructure/5-zero-trust-access.tf)
+    -   **Highlights:**
+        -   An example (currently commented out) of OIDC-based authentication on the ALB to enforce zero trust access.
+        -   Demonstrates how to secure access to application endpoints using an external identity provider.
+
+Additionally, shared resources and dependencies (like the VPC, RDS instance, EC2 instances, etc.) are defined in [main.tf](zero-trust-infrastructure/main.tf).
+
+## Architecture Diagram
+
+Below is a placeholder for your architecture diagram. Replace the placeholder image path with the actual diagram to illustrate the infrastructure components and their relationships.
+
+> **Tip:** Use a diagram tool (e.g., Lucidchart, Draw.io, or AWS Architecture Icons) to create an up-to-date architecture diagram and update the path accordingly.
+
+## Prerequisites
+
+-   **Terraform:** Download and install Terraform (v0.12+ recommended)
+-   **AWS Account:** Ensure you have an AWS account with sufficient permissions to create the resources.
+-   **AWS CLI:** Configure the AWS CLI with your credentials (or use an appropriate Terraform provider configuration).
+-   **Basic Knowledge:** Familiarity with AWS services (VPC, IAM, CloudTrail, etc.) and Terraform.
+
+## Getting Started
+
+1.  **Clone the Repository:**
 
 
-`[ Diagram illustrating VPC, Firewall, ALB, Private Subnet, RDS, etc. ]`
+    `git clone <repository_url>
+    cd <repository_directory>`
 
-Replace this placeholder with any architecture diagram you prefer.
+2.  **Initialize Terraform:**
 
-GitHub Actions with Checkov
----------------------------
+    `terraform init`
 
-This repo can run **Checkov** scans via GitHub Actions to detect misconfigurations and security risks in the Terraform code. You can create a workflow like:
+3.  **Review the Execution Plan:**
 
-Whenever you push or open a pull request, Checkov will analyze the Terraform configuration and highlight potential security or compliance issues.
+    `terraform plan`
 
-Usage
------
+4.  **Apply the Configuration:**
 
-1.  Clone the repo
-2.  Configure AWS credentials
-3.  Run `terraform init && terraform apply`
-4.  (Optional) Add your own `.github/workflows/checkov.yml` to enable CI checks with GitHub Actions
+    `terraform apply`
 
-This reference code is intended as an **example** for establishing a Zero Trust posture, showcasing core concepts rather than providing an exhaustive production-ready solution. Feel free to adapt the configuration to match your specific requirements.
+    Confirm the prompt to proceed with resource creation.
+
+5.  **Verify Deployment:**
+
+    -   Check the AWS Management Console to verify that the resources (VPC, subnets, firewall, RDS, etc.) have been created as expected.
+    -   Ensure CloudTrail and VPC Flow Logs are capturing activity for continuous monitoring.
+
+## Configuration
+
+-   **Variables:** Adjust any variables (e.g., `var.aws_region`, `var.allowed_ip`) in a `terraform.tfvars` file or via the command line to match your environment.
+-   **Certificates:** If you plan to enable HTTPS on the ALB listener, supply a valid certificate ARN in the commented section within <5-zero-trust-access.tf>.
+-   **Security Policies:** Review and customize IAM policies, security group rules, and other security-related settings to meet your compliance and security guidelines.
+
+## Cleanup
+
+To remove all resources created by this Terraform configuration, run:
+
+`terraform destroy`
