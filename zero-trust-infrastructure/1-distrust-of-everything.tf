@@ -159,6 +159,26 @@ resource "aws_networkfirewall_firewall" "firewall" {
 
 data "aws_iam_policy_document" "network_kms_policy" {
   statement {
+    sid     = "EnableRootManagement"
+    effect  = "Allow"
+    actions = [
+      "kms:*"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+      ]
+    }
+    resources = ["*"]
+    
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+  statement {
     sid     = "AllowNetworkFirewallUseKey"
     effect  = "Allow"
     actions = [

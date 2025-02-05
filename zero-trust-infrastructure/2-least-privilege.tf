@@ -70,6 +70,26 @@ resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring_attach" {
 
 data "aws_iam_policy_document" "rds_kms_policy" {
   statement {
+    sid     = "EnableRootManagement"
+    effect  = "Allow"
+    actions = [
+      "kms:*"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+      ]
+    }
+    resources = ["*"]
+    
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+  statement {
     sid     = "AllowRDSUseKey"
     effect  = "Allow"
     actions = [

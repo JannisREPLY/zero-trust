@@ -3,8 +3,35 @@
 ###############################################
 resource "aws_s3_bucket" "cloudtrail_bucket" {
   #checkov:skip=CKV_AWS_144: Overkill - Replication
-  bucket = "my-cloudtrail-logs-bucket"
-  acl    = "private"
+  bucket = "my-cloudtrail-logs-bucket-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_policy" "cloudtrail_bucket_policy" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "AWSCloudTrailAclCheck20150319",
+        Effect    = "Allow",
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        },
+        Action   = "s3:GetBucketAcl",
+        Resource = "${aws_s3_bucket.cloudtrail_bucket.arn}"
+      },
+      {
+        Sid       = "AWSCloudTrailWrite20150319",
+        Effect    = "Allow",
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        },
+        Action   = "s3:PutObject",
+        Resource = "${aws_s3_bucket.cloudtrail_bucket.arn}/prefix/AWSLogs/${data.aws_caller_identity.current.account_id}/*",
+      }
+    ]
+  })
 }
 
 resource "aws_sns_topic" "cloudtrail_sns" {
@@ -26,9 +53,17 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
       ]
     }
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
+  
+  # Statement for CloudTrail
   statement {
-    sid     = "Allow CloudTrail to use the key"
+    sid     = "AllowCloudTrailToUseTheKey"
     effect  = "Allow"
     actions = [
       "kms:Encrypt",
@@ -40,25 +75,40 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
     principals {
       type        = "Service"
       identifiers = [
-        "cloudtrail.amazonaws.com",
-        "logs.amazonaws.com"
+        "cloudtrail.amazonaws.com"
       ]
     }
-
     resources = ["*"]
-
     condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = [
-        "cloudtrail.${var.aws_region}.amazonaws.com"
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+  
+  # Existing statement for CloudWatch Logs
+  statement {
+    sid     = "AllowCloudWatchLogsToUseTheKey"
+    effect  = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = [
+        "logs.${var.aws_region}.amazonaws.com"
       ]
     }
+    resources = ["*"]
     condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
       values   = [
-        "logs.${var.aws_region}.amazonaws.com"
+        "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
       ]
     }
   }
@@ -73,76 +123,23 @@ resource "aws_kms_key" "cloudtrail_kms" {
 resource "aws_cloudtrail" "main_trail" {
   name                          = "main-cloudtrail"
   s3_bucket_name                = aws_s3_bucket.cloudtrail_bucket.bucket
+  s3_key_prefix                 = "prefix"
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_logging                = true
 
-  cloud_watch_logs_group_arn = aws_cloudwatch_log_group.cloudtrail.arn
+  cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
   cloud_watch_logs_role_arn  = aws_iam_role.cloudtrail_cw_role.arn
 
-  # CKV_AWS_36: Enable log file validation
   enable_log_file_validation = true
+  kms_key_id                 = aws_kms_key.cloudtrail_kms.arn
 
-  # CKV_AWS_35: Encrypt logs with KMS
-  kms_key_id = aws_kms_key.cloudtrail_kms.arn
-
-  # CKV_AWS_252: Define an SNS Topic
-  sns_topic_name = aws_sns_topic.cloudtrail_sns.name
+  depends_on = [
+    aws_cloudwatch_log_group.cloudtrail,
+    aws_s3_bucket_policy.cloudtrail_bucket_policy
+  ]
 }
 
-# Create an SQS queue to receive S3 event notifications
-resource "aws_sqs_queue" "s3_event_queue" {
-  name                             = "my-s3-event-queue"
-  kms_master_key_id                = aws_kms_key.cloudtrail_kms.arn
-  kms_data_key_reuse_period_seconds = 300
-}
-
-# Example for CloudTrail bucket
-resource "aws_s3_bucket_notification" "cloudtrail_notifications" {
-  bucket = aws_s3_bucket.cloudtrail_bucket.id
-
-  queue {
-    queue_arn = aws_sqs_queue.s3_event_queue.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-}
-
-# Example for the ALB logs bucket
-resource "aws_s3_bucket_notification" "alb_logs_notifications" {
-  bucket = aws_s3_bucket.alb_logs.id
-
-  queue {
-    queue_arn = aws_sqs_queue.s3_event_queue.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-}
-
-resource "aws_sqs_queue_policy" "s3_event_queue_policy" {
-  queue_url = aws_sqs_queue.s3_event_queue.url
-  policy    = data.aws_iam_policy_document.s3_event_queue_policy.json
-}
-
-data "aws_iam_policy_document" "s3_event_queue_policy" {
-  statement {
-    effect = "Allow"
-    actions = [
-      "SQS:SendMessage"
-    ]
-    principals {
-      type        = "Service"
-      identifiers = ["s3.amazonaws.com"]
-    }
-    resources = [aws_sqs_queue.s3_event_queue.arn]
-    condition {
-      test     = "ArnEquals"
-      variable = "aws:SourceArn"
-      values   = [
-        aws_s3_bucket.cloudtrail_bucket.arn,
-        aws_s3_bucket.alb_logs.arn
-      ]
-    }
-  }
-}
 
 resource "aws_s3_bucket_versioning" "cloudtrail_versioning" {
   bucket = aws_s3_bucket.cloudtrail_bucket.id
@@ -160,8 +157,7 @@ resource "aws_s3_bucket_versioning" "alb_logs_versioning" {
 
 resource "aws_s3_bucket" "access_logs_bucket" {
   #checkov:skip=CKV_AWS_144: Overkill - Replication
-  bucket = "my-s3-access-logs-bucket"
-  acl    = "log-delivery-write"
+  bucket = "my-s3-access-logs-bucket-${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_s3_bucket_logging" "cloudtrail_access_logging" {
@@ -182,20 +178,6 @@ resource "aws_s3_bucket_logging" "alb_logs_access_logging" {
   bucket        = aws_s3_bucket.alb_logs.id
   target_bucket = aws_s3_bucket.access_logs_bucket.id
   target_prefix = "alb/"
-}
-
-resource "aws_s3_bucket_notification" "access_logs_bucket_notifications" {
-  bucket = aws_s3_bucket.access_logs_bucket.id
-
-  # Example: Send event notifications to an existing SQS queue
-  queue {
-    queue_arn = aws_sqs_queue.s3_event_queue.arn
-    events    = ["s3:ObjectCreated:*"]
-    
-    # Optionally define filters for prefix, suffix, etc. if needed
-    # filter_prefix = "some/path/"
-    # filter_suffix = ".log"
-  }
 }
 
 # For the CloudTrail logs bucket
@@ -263,7 +245,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs_enc" {
 }
 
 resource "aws_cloudwatch_log_group" "cloudtrail" {
-  name              = "/aws/cloudtrail/logs"
+  name              = "aws-waf-logs-"
   retention_in_days = 365
   kms_key_id        = aws_kms_key.cloudtrail_kms.arn
 }
@@ -403,7 +385,6 @@ resource "aws_flow_log" "secure_vpc_flow_log" {
   traffic_type         = "ALL"
   log_destination_type = "s3"
   log_destination      = aws_s3_bucket.alb_logs.arn
-  iam_role_arn         = aws_iam_role.flow_logs_role.arn
 }
 
 data "aws_iam_policy_document" "flow_logs_assume_role_doc" {
