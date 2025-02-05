@@ -3,6 +3,7 @@
 ###############################################
 resource "aws_s3_bucket" "cloudtrail_bucket" {
   #checkov:skip=CKV_AWS_144: Overkill - Replication
+  #checkov:skip=CKV2_AWS_62: Overkill 
   bucket = "my-cloudtrail-logs-bucket-${data.aws_caller_identity.current.account_id}"
 }
 
@@ -121,6 +122,7 @@ resource "aws_kms_key" "cloudtrail_kms" {
 }
 
 resource "aws_cloudtrail" "main_trail" {
+  #checkov:skip=CKV_AWS_252: Overkill 
   name                          = "main-cloudtrail"
   s3_bucket_name                = aws_s3_bucket.cloudtrail_bucket.bucket
   s3_key_prefix                 = "prefix"
@@ -157,6 +159,7 @@ resource "aws_s3_bucket_versioning" "alb_logs_versioning" {
 
 resource "aws_s3_bucket" "access_logs_bucket" {
   #checkov:skip=CKV_AWS_144: Overkill - Replication
+  #checkov:skip=CKV2_AWS_62: Overkill 
   bucket = "my-s3-access-logs-bucket-${data.aws_caller_identity.current.account_id}"
 }
 

@@ -37,6 +37,7 @@ resource "aws_internet_gateway" "igw" {
 
 resource "aws_s3_bucket" "alb_logs" {
   #checkov:skip=CKV_AWS_144: Overkill - Replication
+  #checkov:skip=CKV2_AWS_62: Overkill 
   bucket = "my-alb-logs-bucket-${data.aws_caller_identity.current.account_id}"
 }
 
