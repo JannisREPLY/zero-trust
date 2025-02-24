@@ -259,27 +259,58 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
-resource "aws_vpc_endpoint" "rds_endpoint" {
-  vpc_id            = aws_vpc.secure_vpc.id
-  service_name      = "com.amazonaws.${var.aws_region}.rds"
-  vpc_endpoint_type = "Interface"
-  subnet_ids        = [aws_subnet.public_subnet_1.id]
-  security_group_ids = [
-    aws_security_group.rds_sg.id
-  ]
-  private_dns_enabled = true
-
-  policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": "rds-db:connect",
-      "Resource": "arn:aws:rds:${var.aws_region}:${data.aws_caller_identity.current.account_id}:db:${aws_db_instance.default.id}"
+data "aws_iam_policy_document" "rds_kms_policy" {
+  statement {
+    sid     = "EnableRootManagement"
+    effect  = "Allow"
+    actions = [
+      "kms:*"
+    ]
+    principals {
+      type        = "AWS"
+      identifiers = [
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+      ]
     }
-  ]
+    resources = ["*"]
+    
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+  statement {
+    sid     = "AllowRDSUseKey"
+    effect  = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    principals {
+      type        = "Service"
+      identifiers = [
+        "rds.amazonaws.com"
+      ]
+    }
+
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = [
+        "rds.${var.aws_region}.amazonaws.com"
+      ]
+    }
+  }
 }
-EOF
+
+resource "aws_kms_key" "rds_kms" {
+  description         = "KMS key for RDS encryption"
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.rds_kms_policy.json
 }

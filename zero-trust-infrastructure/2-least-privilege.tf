@@ -68,62 +68,6 @@ resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring_attach" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
-data "aws_iam_policy_document" "rds_kms_policy" {
-  statement {
-    sid     = "EnableRootManagement"
-    effect  = "Allow"
-    actions = [
-      "kms:*"
-    ]
-    principals {
-      type        = "AWS"
-      identifiers = [
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-      ]
-    }
-    resources = ["*"]
-    
-    condition {
-      test     = "StringEquals"
-      variable = "aws:PrincipalAccount"
-      values   = [data.aws_caller_identity.current.account_id]
-    }
-  }
-  statement {
-    sid     = "AllowRDSUseKey"
-    effect  = "Allow"
-    actions = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:ReEncrypt*",
-      "kms:GenerateDataKey*",
-      "kms:DescribeKey"
-    ]
-    principals {
-      type        = "Service"
-      identifiers = [
-        "rds.amazonaws.com"
-      ]
-    }
-
-    resources = ["*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = [
-        "rds.${var.aws_region}.amazonaws.com"
-      ]
-    }
-  }
-}
-
-resource "aws_kms_key" "rds_kms" {
-  description         = "KMS key for RDS encryption"
-  enable_key_rotation = true
-  policy              = data.aws_iam_policy_document.rds_kms_policy.json
-}
-
 resource "aws_db_subnet_group" "default" {
   name       = "main-db-subnet-group"
   subnet_ids = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]

@@ -262,31 +262,28 @@ resource "aws_lb_listener" "alb_https_listener" {
   }
 }
 */
-resource "aws_instance" "web_server" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro"
-  subnet_id              = aws_subnet.private_subnet_1.id
-  vpc_security_group_ids = [aws_security_group.secure_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2.name
 
-  ebs_optimized = true
-  monitoring    = true
-
-  root_block_device {
-    encrypted = true
-  }
-
-  metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
-  }
-
-  tags = { 
-    Name = "web-server" 
-  }
-
-  depends_on = [
-    aws_lb_listener.alb_http_listener,
-    #aws_lb_listener.alb_https_listener
+resource "aws_vpc_endpoint" "rds_endpoint" {
+  vpc_id            = aws_vpc.secure_vpc.id
+  service_name      = "com.amazonaws.${var.aws_region}.rds"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.public_subnet_1.id]
+  security_group_ids = [
+    aws_security_group.rds_sg.id
   ]
+  private_dns_enabled = true
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "rds-db:connect",
+      "Resource": "arn:aws:rds:${var.aws_region}:${data.aws_caller_identity.current.account_id}:db:${aws_db_instance.default.id}"
+    }
+  ]
+}
+EOF
 }
