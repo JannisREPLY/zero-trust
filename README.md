@@ -46,12 +46,6 @@ The project is organized into multiple Terraform files, each focusing on one or 
 
 Additionally, shared resources and dependencies (like the VPC, RDS instance, EC2 instances, etc.) are defined in [main.tf](zero-trust-infrastructure/main.tf).
 
-## Architecture Diagram
-
-Below is a placeholder for your architecture diagram. Replace the placeholder image path with the actual diagram to illustrate the infrastructure components and their relationships.
-
-> **Tip:** Use a diagram tool (e.g., Lucidchart, Draw.io, or AWS Architecture Icons) to create an up-to-date architecture diagram and update the path accordingly.
-
 ## Prerequisites
 
 -   **Terraform:** Download and install Terraform (v0.12+ recommended)
